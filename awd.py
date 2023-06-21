@@ -82,6 +82,24 @@ def interactive(cmd):
     client.open_shell(cmd+"\n")
 
 
+@awd.group()
+def phpcmd():
+    pass
+
+@phpcmd.command("exec")
+@click.argument('cmd')
+def phpcmd_exec(cmd):
+    """Runs the command with cmd"""
+    client.run(f'php -r "system(\'{cmd}\');"')
+
+@phpcmd.command("reset")
+@click.option('-u', '--user', help='user to connect as', default='www-data')
+def phpcmd_reset(user):
+    """Reset server process to prevent Immortal SHELL"""
+    cmd = '''kill `ps aux | grep ''' + user + ''' | awk '{print $2}' | xargs kill -9`'''
+    client.run(f'''php -r 'system("{cmd}");' ''')
+
+
 @awd.command("push")
 @click.argument('local_path', type=click.Path(exists=True))
 @click.argument('remote_path', type=click.Path())
@@ -107,13 +125,14 @@ def backup(ctx):
 
 
 @backup.command("html")
-def backup_html():
+@click.argument('path', default='/var/www/html')
+def backup_html(path : str = '/var/www/html'):
     """Backup the html files"""
     name = timestamp + "-backup.tgz"
     local_name = join(directory, name)
     dir_name = join(directory, timestamp + "-backup")
     client.run(
-        f'cd /tmp; tar -czvf backup.tgz /var/www/html; cp backup.tgz {name}')
+        f'cd /tmp; tar -czvf backup.tgz -C {path} .; cp backup.tgz {name}')
     client.pull(f'/tmp/{name}', local_name)
     os.system(f'mkdir -p {dir_name} && tar -xzvf {local_name} -C {dir_name}')
 
@@ -147,14 +166,29 @@ def recovery_html(local: bool):
         logger.error("No fix directory found")
         sys.exit(1)
     if local:
-        os.system(f"tar -czvf /tmp/fix.tgz -C {fix_dir} .")
-        client.push("/tmp/fix.tgz", "/tmp/fix.tgz")
+        # os.system(f"tar -czvf /tmp/fix.tgz -C {fix_dir} .")
+        with tarfile.open("fix.tgz", "w:gz") as tar:
+            tar.add(fix_dir, arcname=".")
+        client.push("fix.tgz", "/tmp/fix.tgz")
         client.run(
             "cd /var/www/html; rm -rf *; tar -xzvf /tmp/fix.tgz; chmod -R 777 /var/www/html/ && rm /tmp/fix.tgz")
+        os.remove('fix.tgz')
     else:
         client.run(
             f'cd /tmp; tar -xzvf backup.tgz; rm -rf /var/www/html/*; cp -r /tmp/var/www/html/* /var/www/html/; chmod -R 777 /var/www/html/')
 
+@recovery.command("dir")
+@click.argument('local_path', type=click.Path(exists=True))
+@click.argument('remote_path', type=click.Path())
+def recovery_html(local_path: str, remote_path: str):
+    """Recover the remote directory with local directory"""
+    basename = os.path.basename(local_path)
+    with tarfile.open("recovery.tar.gz", "w:gz") as tar:
+        tar.add(local_path, arcname=basename)
+    client.push('recovery.tar.gz', '/tmp/recovery.tar.gz')
+    client.run(
+        f'cd /tmp; tar -xvf recovery.tar.gz; rm -rf {remote_path}/*; cp -r /tmp/{basename}/* {remote_path}/; chmod -R 777 {remote_path}/')
+    os.remove('recovery.tar.gz')
 
 @recovery.command("db")
 @click.option('-u', '--user', help='user to connect as', default='root')
